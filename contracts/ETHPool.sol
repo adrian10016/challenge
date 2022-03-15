@@ -8,35 +8,11 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract ETHPool is Ownable, AccessControl {
     bytes32 public constant TEAM_MEMBER = keccak256("TEAM_MEMBER");
 
-    /// @notice Info of User who deposit to the pool.
-    /// `amount` Amount of Eth the user has deposited.
-    /// `pendingRewards` Pending rewards Amount of Eth.
-    /// `lastRewardCycleId` Last Reward Cycle Id that user has been rewarded.
-    struct UserInfo {
-        uint amount;
-        uint pendingRewards;
-        uint lastRewardCycleId;
-    }
-
-    /// @notice Info of Reward Cycle that rewards deposited by the team.
-    /// `poolAmount` Amount of Eth that users deposited in the current reward cycle.
-    /// `rewardsAmount` Rewards Amount of Eth deposited by the team.
-    struct RewardCycleInfo {
-        uint poolAmount;
-        uint rewardsAmount;
-    }
-
-    /// @notice Info of all users.
-    mapping (address => UserInfo) public userInfo;
-    /// @notice RewardCycleId => amount of users to be rewarded
-    mapping (uint => RewardCycleInfo) public rewardCycle;
-    /// @notice Current Reward Cycle Id
-    uint curRewardCycleId;
-
+    mapping (address => uint256) public user;
+    uint totalShares;
 
     event Deposit(address indexed user, uint amount);
-    event DepositRewards(address user, uint amount);
-    event Withdraw(address indexed user, uint amount, uint rewards);
+    event Withdraw(address indexed user, uint amount);
 
     constructor() {
         _grantRole(TEAM_MEMBER, msg.sender);
@@ -48,52 +24,41 @@ contract ETHPool is Ownable, AccessControl {
 
     /// @notice withdraw deposits along with their share of rewards considering the time when they deposited
     function withdraw() public {
-        UserInfo storage user = userInfo[msg.sender];
-        uint amount = user.amount;
-        require(amount > 0);
-        user.pendingRewards += getRewards(amount, user.lastRewardCycleId, curRewardCycleId);
-
-        rewardCycle[curRewardCycleId].poolAmount -= amount;
-        uint rewards = user.pendingRewards;
-        user.amount = user.pendingRewards = 0;
-        user.lastRewardCycleId = curRewardCycleId;
-        
+        uint totalEth = address(this).balance;
+        console.log("totalEth", totalEth);
+        console.log("totalShares", totalShares);
+        console.log("user[msg.sender]", user[msg.sender]);
+        uint amount = user[msg.sender] * totalEth / totalShares;
+        totalShares -= user[msg.sender];
+        user[msg.sender] = 0;
         (bool success, ) = msg.sender.call{
-            value: amount + rewards
+            value: amount
         }("");
         require(success, "EthPool: Transfer failed.");
-        emit Withdraw(msg.sender, amount, rewards);
+        emit Withdraw(msg.sender, user[msg.sender]);
     }
 
     /// @notice deposit Eth to the pool
     function deposit() public payable {
-        UserInfo storage user = userInfo[msg.sender];
-        user.pendingRewards += getRewards(user.amount, user.lastRewardCycleId, curRewardCycleId);
-        userInfo[msg.sender].amount += msg.value;
-        userInfo[msg.sender].lastRewardCycleId = curRewardCycleId;
-        rewardCycle[curRewardCycleId].poolAmount += msg.value;
-        emit Deposit(msg.sender, msg.value);
+        uint amount = msg.value;
+        uint totalEth = address(this).balance - amount;
+        if (totalShares == 0 || totalEth == 0) {
+            totalShares += amount;
+            user[msg.sender] += amount;
+        } else {
+            uint what = amount * totalShares / totalEth;
+            totalShares += what;
+            user[msg.sender] += what;
+        }
+        
+        emit Deposit(msg.sender, amount);
     }
 
     /// @notice team deposit rewards
     function depositRewards() public payable onlyRole(TEAM_MEMBER) {
-        RewardCycleInfo storage curRewardCycle = rewardCycle[curRewardCycleId];
-        require(curRewardCycle.poolAmount > 0, "EthPool: empty pool");
-        curRewardCycle.rewardsAmount = msg.value;
-        rewardCycle[curRewardCycleId+1].poolAmount = curRewardCycle.poolAmount;
-        curRewardCycleId ++;
-        emit DepositRewards(msg.sender, msg.value);
     }
 
-    /// @notice get pending rewards for user
-    function getPendingRewards(address account) external view returns (uint pendingRewards) {
-        UserInfo storage user = userInfo[account];
-        pendingRewards = user.pendingRewards + getRewards(user.amount, user.lastRewardCycleId, curRewardCycleId);
-    }
-
-    /// @notice get rewards between cycles
-    function getRewards(uint amount, uint startCycleId, uint endCycleId) internal view returns (uint rewards) {
-        for (uint i = startCycleId; i < endCycleId; i ++)
-            rewards += amount * rewardCycle[i].rewardsAmount / rewardCycle[i].poolAmount;
+    receive() external payable {
+        revert();
     }
 }
